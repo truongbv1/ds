@@ -195,9 +195,31 @@ create_secondary_gie (NvDsGieConfig *configs1,
         config->list_operate_on_class_ids[i]);
   }
 
-  g_object_set (G_OBJECT (subbin->secondary_gie),
+  // g_object_set (G_OBJECT (subbin->secondary_gie),
+  //     "config-file-path", GET_FILE_PATH (config->config_file_path),
+  //     "process-mode", 2, NULL);
+  // if(index == 0){
+  //   g_object_set (G_OBJECT (subbin->secondary_gie),
+  //       "config-file-path", GET_FILE_PATH (config->config_file_path),
+  //       "process-mode", 1, NULL);
+  // }else{
+  //   g_object_set (G_OBJECT (subbin->secondary_gie),
+  //     "config-file-path", GET_FILE_PATH (config->config_file_path),
+  //     "process-mode", 2, NULL);
+  // }
+
+  // modify for secondary is full frame or object
+  if(config->is_process_mode_type_set){
+    g_print("process-mode: %d\n",config->process_mode_type);
+    g_object_set (G_OBJECT (subbin->secondary_gie),
+      "config-file-path", GET_FILE_PATH (config->config_file_path),
+      "process-mode", config->process_mode_type, NULL);
+  }
+  else{
+    g_object_set (G_OBJECT (subbin->secondary_gie),
       "config-file-path", GET_FILE_PATH (config->config_file_path),
       "process-mode", 2, NULL);
+  }
 
 
   if (config->num_operate_on_class_ids !=0)
@@ -313,7 +335,8 @@ should_create_secondary_gie (NvDsGieConfig *config_array, guint num_configs,
     return TRUE;
   }
 
-  if (config->operate_on_gie_id == primary_gie_id) {
+  // modify for secondary is full frame
+  if (config->operate_on_gie_id == primary_gie_id || config->operate_on_gie_id == 0) {
     bins[index].create = TRUE;
     bins[index].parent_index = -1;
     return TRUE;

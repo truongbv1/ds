@@ -90,6 +90,11 @@ typedef struct
 
   gchar *tag;
 
+  guint process_mode_type; //add
+  gboolean is_process_mode_type_set; //add
+  // gint num_operate_on_source_ids; //add
+  // gint *list_operate_on_source_ids; //add new  
+
   NvDsGiePluginType plugin_type;
 } NvDsGieConfig;
 

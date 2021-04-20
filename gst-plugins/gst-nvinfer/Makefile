@@ -23,8 +23,8 @@ NVDS_VERSION:=5.1
 
 CFLAGS+= -fPIC -std=c++11 -DDS_VERSION=\"5.1.0\" \
 	 -I /usr/local/cuda-$(CUDA_VER)/include \
-	 -I ../../includes \
-	 -I ../../libs/nvdsinfer -DNDEBUG
+	 -I /opt/nvidia/deepstream/deepstream-$(NVDS_VERSION)/sources/includes \
+	 -I /opt/nvidia/deepstream/deepstream-$(NVDS_VERSION)/sources/libs/nvdsinfer -DNDEBUG
 
 GST_INSTALL_DIR?=/opt/nvidia/deepstream/deepstream-$(NVDS_VERSION)/lib/gst-plugins/
 LIB_INSTALL_DIR?=/opt/nvidia/deepstream/deepstream-$(NVDS_VERSION)/lib/
@@ -34,13 +34,18 @@ LIBS := -shared -Wl,-no-undefined \
 
 LIBS+= -L$(LIB_INSTALL_DIR) -lnvdsgst_helper -lnvdsgst_meta -lnvds_meta \
        -lnvds_infer -lnvbufsurface -lnvbufsurftransform -ldl -lpthread \
-       -lcuda -Wl,-rpath,$(LIB_INSTALL_DIR)
+       -Wl,-rpath,$(LIB_INSTALL_DIR)
 
 OBJS:= $(SRCS:.cpp=.o)
 
-PKGS:= gstreamer-1.0 gstreamer-base-1.0 gstreamer-video-1.0
+PKGS:= gstreamer-1.0 gstreamer-base-1.0 gstreamer-video-1.0 opencv4
 CFLAGS+=$(shell pkg-config --cflags $(PKGS))
 LIBS+=$(shell pkg-config --libs $(PKGS))
+
+ifeq ($(shell uname -m), aarch64)
+CFLAGS+=-DIS_TEGRA
+LIBS+=-lcuda
+endif
 
 all: $(LIB)
 

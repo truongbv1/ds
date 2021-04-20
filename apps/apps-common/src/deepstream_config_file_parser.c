@@ -109,6 +109,8 @@ GST_DEBUG_CATEGORY (APP_CFG_PARSER_CAT);
 #define CONFIG_GROUP_GIE_AUDIO_TRANSFORM "audio-transform"
 #define CONFIG_GROUP_GIE_FRAME_SIZE "audio-framesize"
 #define CONFIG_GROUP_GIE_HOP_SIZE "audio-hopsize"
+#define CONFIG_GROUP_GIE_PROCESS_MODE_TYPE "process-mode-type" //add 1: full frame, 2: obj
+// #define CONFIG_GROUP_GIE_SOURCE_IDS_FOR_OPERATION "operate-on-source-ids" //add: nvinfer for multi source 
 /** desired input rate of audio to nvinferaudio in samples per second */
 #define CONFIG_GROUP_GIE_AUDIO_RATE "audio-input-rate"
 
@@ -1109,7 +1111,27 @@ parse_gie (NvDsGieConfig *config, GKeyFile *key_file, gchar *group, gchar *cfg_f
           CONFIG_GROUP_GIE_UNIQUE_ID, &error);
       config->is_unique_id_set = TRUE;
       CHECK_ERROR (error);
-    } else if (!g_strcmp0 (*key, CONFIG_GROUP_GIE_ID_FOR_OPERATION)) {
+    } 
+    
+    // add new
+    else if (!g_strcmp0 (*key, CONFIG_GROUP_GIE_PROCESS_MODE_TYPE)) {
+      config->process_mode_type =
+          g_key_file_get_integer (key_file, group,
+          CONFIG_GROUP_GIE_PROCESS_MODE_TYPE, &error);
+      config->is_process_mode_type_set = TRUE;
+      CHECK_ERROR (error);
+    }
+    // else if (!g_strcmp0 (*key, CONFIG_GROUP_GIE_SOURCE_IDS_FOR_OPERATION)) {
+    //   gsize length;
+    //   config->list_operate_on_source_ids = g_key_file_get_integer_list (key_file, group,
+    //       CONFIG_GROUP_GIE_SOURCE_IDS_FOR_OPERATION, &length, &error);
+    //   config->num_operate_on_source_ids = length;
+    //   CHECK_ERROR (error);
+    // }
+
+
+    
+    else if (!g_strcmp0 (*key, CONFIG_GROUP_GIE_ID_FOR_OPERATION)) {
       config->operate_on_gie_id =
           g_key_file_get_integer (key_file, group,
           CONFIG_GROUP_GIE_ID_FOR_OPERATION, &error);

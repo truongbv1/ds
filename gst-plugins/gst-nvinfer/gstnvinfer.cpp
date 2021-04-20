@@ -8,7 +8,15 @@
  * license agreement from NVIDIA Corporation is strictly prohibited.
  *
  */
+//face align
+#define CONF_THRESH 0.75
+#define NMS_THRESH 0.5
+#include <map>
+#include <algorithm>
+#include <cstring>
 
+
+#include <fstream>//
 #include <string.h>
 #include <sstream>
 #include <sys/time.h>
@@ -18,6 +26,7 @@
 #include <mutex>
 #include <list>
 #include <thread>
+#include <iostream>
 
 #include "gst-nvevent.h"
 #include "gstnvdsmeta.h"
@@ -27,6 +36,176 @@
 #include "gstnvinfer_meta_utils.h"
 #include "gstnvinfer_property_parser.h"
 #include "gstnvinfer_impl.h"
+static int w =0;
+
+
+
+
+
+
+
+
+float default_landmark[5][2] = {  
+    {30.2946f+8.0f, 51.6963f},
+    {65.5318f+8.0f, 51.5014f},
+    {48.0252f+8.0f, 71.7366f},
+    {33.5493f+8.0f, 92.3655f},
+    {62.7299f+8.0f, 92.2041f}
+}; 
+
+cv::Mat src_landmark(5 , 2, CV_32FC1, default_landmark); 
+// memcpy(src_landmark.data, default_landmark, 2 * 5 * sizeof(float));
+
+namespace FacePreprocess {
+
+    cv::Mat meanAxis0(const cv::Mat &src)
+    {
+        int num = src.rows;
+        int dim = src.cols;
+
+        // x1 y1
+        // x2 y2
+
+        cv::Mat output(1,dim,CV_32F);
+        for(int i = 0 ; i <  dim; i ++)
+        {
+            float sum = 0 ;
+            for(int j = 0 ; j < num ; j++)
+            {
+                sum+=src.at<float>(j,i);
+            }
+            output.at<float>(0,i) = sum/num;
+        }
+
+        return output;
+    }
+
+    cv::Mat elementwiseMinus(const cv::Mat &A,const cv::Mat &B)
+    {
+        cv::Mat output(A.rows,A.cols,A.type());
+
+        assert(B.cols == A.cols);
+        if(B.cols == A.cols)
+        {
+            for(int i = 0 ; i <  A.rows; i ++)
+            {
+                for(int j = 0 ; j < B.cols; j++)
+                {
+                    output.at<float>(i,j) = A.at<float>(i,j) - B.at<float>(0,j);
+                }
+            }
+        }
+        return output;
+    }
+
+    cv::Mat varAxis0(const cv::Mat &src)
+    {
+        cv::Mat temp_ = elementwiseMinus(src,meanAxis0(src));
+            cv::multiply(temp_ ,temp_ ,temp_ );
+            return meanAxis0(temp_);
+    }
+
+    int MatrixRank(cv::Mat M)
+    {
+        cv::Mat w, u, vt;
+        cv::SVD::compute(M, w, u, vt);
+        cv::Mat1b nonZeroSingularValues = w > 0.0001;
+        int rank = countNonZero(nonZeroSingularValues);
+        return rank;
+
+    }
+
+
+    cv::Mat similarTransform(cv::Mat src, cv::Mat dst) {
+        int num = src.rows;
+        int dim = src.cols;
+        cv::Mat src_mean = meanAxis0(src);
+        cv::Mat dst_mean = meanAxis0(dst);
+        
+        cv::Mat src_demean = elementwiseMinus(src, src_mean);
+        cv::Mat dst_demean = elementwiseMinus(dst, dst_mean);
+        
+        cv::Mat A = (dst_demean.t() * src_demean) / static_cast<float>(num);
+        
+        cv::Mat d(dim, 1, CV_32F);
+        
+        d.setTo(1.0f);
+        if (cv::determinant(A) < 0) {
+            d.at<float>(dim - 1, 0) = -1;
+        }
+        
+        // cv::Mat T = cv::Mat::eye(dim + 1, dim + 1, CV_32F);
+        cv::Mat T = cv::Mat::eye(dim, dim + 1, CV_32F);
+        cv::Mat U, S, V;
+        cv::SVD::compute(A, S,U, V);
+
+        // the SVD function in opencv differ from scipy .
+
+        int rank = MatrixRank(A);
+        if (rank == 0) {
+            assert(rank == 0);
+
+        } else if (rank == dim - 1) {
+            
+            if (cv::determinant(U) * cv::determinant(V) > 0) {
+                T.rowRange(0, dim).colRange(0, dim) = U * V;
+            } else {
+               
+                int s = d.at<float>(dim - 1, 0) = -1;
+                d.at<float>(dim - 1, 0) = -1;
+
+                T.rowRange(0, dim).colRange(0, dim) = U * V;
+                cv::Mat diag_ = cv::Mat::diag(d);
+                cv::Mat twp = diag_*V; //np.dot(np.diag(d), V.T)
+                cv::Mat B = cv::Mat::zeros(3, 3, CV_8UC1);
+                cv::Mat C = B.diag(0);
+                T.rowRange(0, dim).colRange(0, dim) = U* twp;
+                d.at<float>(dim - 1, 0) = s;
+            }
+        }
+        else{
+          
+            cv::Mat diag_ = cv::Mat::diag(d);
+            cv::Mat twp = diag_*V.t(); //np.dot(np.diag(d), V.T)
+            cv::Mat res = U* twp; // U
+            T.rowRange(0, dim).colRange(0, dim) = -U.t()* twp;
+        }
+
+        cv::Mat res;        
+        cv::multiply(d,S,res);
+        T.rowRange(0, dim).colRange(0, dim) = - T.rowRange(0, dim).colRange(0, dim).t();
+        T.rowRange(0, dim).colRange(dim, dim+1)= dst_mean.t();
+
+        return T;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#define CHECK_CUDA_STATUS(cuda_status,error_str) do { \
+  if ((cuda_status) != cudaSuccess) { \
+    g_print ("Error: %s in %s at line %d (%s)\n", \
+        error_str, __FILE__, __LINE__, cudaGetErrorName(cuda_status)); \
+    goto error; \
+  } \
+} while (0)
+#define USE_EGLIMAGE 1
 
 using namespace gstnvinfer;
 using namespace nvdsinfer;
@@ -89,18 +268,38 @@ static GQuark _dsmeta_quark = 0;
 #define DEFAULT_OUTPUT_TENSOR_META FALSE
 #define DEFAULT_OUTPUT_INSTANCE_MASK FALSE
 
+
+
 /* By default NVIDIA Hardware allocated memory flows through the pipeline. We
  * will be processing on this type of memory only. */
 #define GST_CAPS_FEATURE_MEMORY_NVMM "memory:NVMM"
+/************************ get image with format RGBA ***********************/
 static GstStaticPadTemplate gst_nvinfer_sink_template =
 GST_STATIC_PAD_TEMPLATE ("sink", GST_PAD_SINK, GST_PAD_ALWAYS,
     GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
-        (GST_CAPS_FEATURE_MEMORY_NVMM, "{ NV12, RGBA }")));
+        (GST_CAPS_FEATURE_MEMORY_NVMM, "{ RGBA }")));
 
 static GstStaticPadTemplate gst_nvinfer_src_template =
 GST_STATIC_PAD_TEMPLATE ("src", GST_PAD_SRC, GST_PAD_ALWAYS,
     GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
-        (GST_CAPS_FEATURE_MEMORY_NVMM, "{ NV12, RGBA }")));
+        (GST_CAPS_FEATURE_MEMORY_NVMM, "{ RGBA }")));
+
+/******************************** end modify ******************************/
+
+
+
+
+
+// static GstStaticPadTemplate gst_nvinfer_sink_template =
+// GST_STATIC_PAD_TEMPLATE ("sink", GST_PAD_SINK, GST_PAD_ALWAYS,
+//     GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
+//         (GST_CAPS_FEATURE_MEMORY_NVMM, "{ NV12, RGBA }")));
+
+// static GstStaticPadTemplate gst_nvinfer_src_template =
+// GST_STATIC_PAD_TEMPLATE ("src", GST_PAD_SRC, GST_PAD_ALWAYS,
+//     GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
+//         (GST_CAPS_FEATURE_MEMORY_NVMM, "{ NV12, RGBA }")));
+
 
 guint gst_nvinfer_signals[LAST_SIGNAL] = { 0 };
 
@@ -356,6 +555,7 @@ gst_nvinfer_init (GstNvInfer * nvinfer)
   nvinfer->config_file_path = g_strdup (DEFAULT_CONFIG_FILE_PATH);
   nvinfer->operate_on_class_ids = new std::vector < gboolean >;
   nvinfer->filter_out_class_ids = new std::set<uint>;
+  nvinfer->operate_on_source_ids = new std::set<uint>;//modify
   nvinfer->output_tensor_meta = DEFAULT_OUTPUT_TENSOR_META;
   nvinfer->output_instance_mask = DEFAULT_OUTPUT_INSTANCE_MASK;
 
@@ -397,6 +597,7 @@ gst_nvinfer_finalize (GObject * object)
   g_free (nvinfer->config_file_path);
   delete nvinfer->operate_on_class_ids;
   delete nvinfer->filter_out_class_ids;
+  delete nvinfer->operate_on_source_ids;//modify
 
   delete DS_NVINFER_IMPL(nvinfer);
 
@@ -469,6 +670,21 @@ gst_nvinfer_set_property (GObject * object, guint prop_id,
         nvinfer->operate_on_class_ids->at (cid) = TRUE;
     }
       break;
+
+    //modify
+    case PROP_OPERATE_ON_SOURCE_IDS:
+    {
+        std::stringstream str(g_value_get_string(value));
+        nvinfer->operate_on_source_ids->clear();
+        while(str.peek() != EOF) {
+            gint source_id;
+            str >> source_id;
+            nvinfer->operate_on_source_ids->insert(source_id);
+            str.get();
+        }
+    }
+      break;
+
     case PROP_FILTER_OUT_CLASS_IDS:
     {
         std::stringstream str(g_value_get_string(value));
@@ -562,6 +778,17 @@ gst_nvinfer_get_property (GObject * object, guint prop_id,
       g_value_set_string (value, str.str ().c_str ());
     }
       break;
+
+    // modify
+    case PROP_OPERATE_ON_SOURCE_IDS:
+    {
+        std::stringstream str;
+        for(const auto id : *nvinfer->operate_on_source_ids)
+            str << id << ";";
+        g_value_set_string (value, str.str ().c_str ());
+    }
+        break;
+
     case PROP_FILTER_OUT_CLASS_IDS:
     {
         std::stringstream str;
@@ -646,9 +873,6 @@ gst_nvinfer_reset_init_params (GstNvInfer * nvinfer)
   if (nvinfer->is_prop_set->at (PROP_GPU_DEVICE_ID))
     impl->m_InitParams->gpuID = prev_params->gpuID;
 
-  if (nvinfer->is_prop_set->at (PROP_UNIQUE_ID))
-    impl->m_InitParams->uniqueID = prev_params->uniqueID;
-
   delete prev_params->perClassDetectionParams;
   g_strfreev (prev_params->outputLayerNames);
   g_strfreev (prev_params->outputIOFormats);
@@ -707,6 +931,7 @@ gst_nvinfer_sink_event (GstBaseTransform * trans, GstEvent * event)
     guint source_id;
     gst_nvevent_parse_pad_added (event, &source_id);
     nvinfer->source_info->emplace (source_id, GstNvInferSourceInfo ());
+
   }
 
   if ((GstNvEventType) GST_EVENT_TYPE (event) == GST_NVEVENT_PAD_DELETED) {
@@ -850,32 +1075,23 @@ gst_nvinfer_start (GstBaseTransform * btrans)
   gst_buffer_pool_config_set_params (config_ptr.get(), nullptr,
       sizeof (GstNvInferMemory), INTERNAL_BUF_POOL_SIZE, INTERNAL_BUF_POOL_SIZE);
 
-
-  /* Set the NvBufSurfTransform config parameters. */
-  nvinfer->transform_config_params.gpu_id = nvinfer->gpu_id;
-  nvinfer->transform_config_params.cuda_stream = nvinfer->convertStream;
-
-  NvBufSurfTransformSetSessionParams (&nvinfer->transform_config_params);
-
   /* Based on the network input requirements decide the buffer pool color format. */
   switch (init_params->networkInputFormat) {
     case NvDsInferFormat_RGB:
     case NvDsInferFormat_BGR:
-    if(nvinfer->transform_config_params.compute_mode == NvBufSurfTransformCompute_VIC) {
+#ifdef IS_TEGRA
       color_format = NVBUF_COLOR_FORMAT_RGBA;
-    }
-    else {
+#else
       color_format = NVBUF_COLOR_FORMAT_RGB;
-    }
-    break;
+#endif
+      break;
     case NvDsInferFormat_GRAY:
-    if(nvinfer->transform_config_params.compute_mode == NvBufSurfTransformCompute_VIC) {
+#ifdef IS_TEGRA
       color_format = NVBUF_COLOR_FORMAT_NV12;
-    }
-    else {
+#else
       color_format = NVBUF_COLOR_FORMAT_GRAY8;
-    }
-    break;
+#endif
+      break;
     default:
       GST_ELEMENT_ERROR (nvinfer, LIBRARY, SETTINGS,
           ("Unsupported network input format: %d",
@@ -927,6 +1143,10 @@ gst_nvinfer_start (GstBaseTransform * btrans)
             cudaGetErrorName (cudaReturn)));
     return FALSE;
   }
+
+  /* Set the NvBufSurfTransform config parameters. */
+  nvinfer->transform_config_params.gpu_id = nvinfer->gpu_id;
+  nvinfer->transform_config_params.cuda_stream = nvinfer->convertStream;
 
   /* Create the intermediate NvBufSurface structure for holding an array of input
    * NvBufSurfaceParams for batched transforms. */
@@ -1087,7 +1307,7 @@ get_converted_buffer (GstNvInfer * nvinfer, NvBufSurface * src_surf,
         g_assert_not_reached ();
         break;
     }
-
+    
     /* Pad the scaled image with black color. */
     cudaReturn =
         cudaMemset2DAsync ((uint8_t *) destCudaPtr + pixel_size * dest_width,
@@ -1132,8 +1352,7 @@ get_converted_buffer (GstNvInfer * nvinfer, NvBufSurface * src_surf,
   nvinfer->transform_params.dst_rect[nvinfer->tmp_surf.numFilled] =
       {0, 0, dest_width, dest_height};
 
-  nvinfer->tmp_surf.numFilled++;
-  nvinfer->tmp_surf.memType = src_surf->memType;
+  nvinfer->tmp_surf.numFilled++; 
 
   return GST_FLOW_OK;
 }
@@ -1288,6 +1507,121 @@ convert_batch_and_push_to_input_thread (GstNvInfer *nvinfer,
 }
 
 /* Process entire frames in the batched buffer. */
+// static GstFlowReturn
+// gst_nvinfer_process_full_frame (GstNvInfer * nvinfer, GstBuffer * inbuf,
+//     NvBufSurface * in_surf)
+// {
+//   NvOSD_RectParams rect_params;
+//   NvDsBatchMeta *batch_meta = NULL;
+//   guint num_filled = 0;
+//   std::unique_ptr<GstNvInferBatch> batch = nullptr;
+//   GstBuffer *conv_gst_buf = nullptr;
+//   GstFlowReturn flow_ret;
+//   GstNvInferMemory *memory = nullptr;
+//   gdouble scale_ratio_x, scale_ratio_y;
+//   gboolean skip_batch;
+
+//   /* Process batch only when interval_counter is 0. */
+//   skip_batch = (nvinfer->interval_counter++ % (nvinfer->interval + 1) > 0);
+
+//   if (skip_batch) {
+//     return GST_FLOW_OK;
+//   }
+
+//   if (((in_surf->memType == NVBUF_MEM_DEFAULT || in_surf->memType == NVBUF_MEM_CUDA_DEVICE) &&
+//        ((int)in_surf->gpuId != (int)nvinfer->gpu_id)) ||
+//       (((int)in_surf->gpuId == (int)nvinfer->gpu_id) && (in_surf->memType == NVBUF_MEM_SYSTEM)))  {
+//     GST_ELEMENT_ERROR (nvinfer, RESOURCE, FAILED,
+//         ("Memory Compatibility Error:Input surface gpu-id doesnt match with configured gpu-id for element,"
+//          " please allocate input using unified memory, or use same gpu-ids OR,"
+//          " if same gpu-ids are used ensure appropriate Cuda memories are used"),
+//         ("surface-gpu-id=%d,%s-gpu-id=%d",in_surf->gpuId,GST_ELEMENT_NAME(nvinfer),
+//          nvinfer->gpu_id)); \
+//       return GST_FLOW_ERROR;
+//   }
+
+//   // g_print("id_infer: %d\n", nvinfer->unique_id);
+//   batch_meta = gst_buffer_get_nvds_batch_meta (inbuf);
+//   if (batch_meta == nullptr) {
+//     GST_ELEMENT_ERROR (nvinfer, STREAM, FAILED,
+//         ("NvDsBatchMeta not found for input buffer."), (NULL));
+//     return GST_FLOW_ERROR;
+//   }
+//   num_filled = batch_meta->num_frames_in_batch;
+
+//   /* Processing on full frames. Iterate through all the frames in the batched
+//    * input buffer. */
+//   for (guint i = 0; i < num_filled; i++) {
+//     guint idx;
+//     /* No existing GstNvInferBatch structure. Allocate a new structure,
+//      * acquire a buffer from our internal pool for conversions. */
+//     if (batch == nullptr) {
+//       batch.reset (new GstNvInferBatch);
+//       batch->push_buffer = FALSE;
+//       batch->inbuf = inbuf;
+//       batch->inbuf_batch_num = nvinfer->current_batch_num;
+
+//       flow_ret =
+//           gst_buffer_pool_acquire_buffer (nvinfer->pool, &conv_gst_buf,
+//           nullptr);
+//       if (flow_ret != GST_FLOW_OK) {
+//         return flow_ret;
+//       }
+//       memory = gst_nvinfer_buffer_get_memory (conv_gst_buf);
+//       if (!memory) {
+//         return GST_FLOW_ERROR;
+//       }
+//       batch->conv_buf = conv_gst_buf;
+//     }
+
+//     idx = batch->frames.size ();
+//     /* Scale the entire frame to network resolution. */
+//     rect_params.left = 0;
+//     rect_params.top = 0;
+//     rect_params.width = in_surf->surfaceList[i].width;
+//     rect_params.height = in_surf->surfaceList[i].height;
+
+//     /* Scale and convert the buffer. */
+//     if (get_converted_buffer (nvinfer, in_surf, in_surf->surfaceList + i,
+//             &rect_params, memory->surf, memory->surf->surfaceList + idx,
+//             scale_ratio_x, scale_ratio_y,
+//             memory->frame_memory_ptrs[idx]) != GST_FLOW_OK) {
+//       GST_ELEMENT_ERROR (nvinfer, STREAM, FAILED, ("Buffer conversion failed"),
+//           (NULL));
+//       return GST_FLOW_ERROR;
+//     }
+
+//     /* Adding a frame to the current batch. Set the frames members. */
+//     GstNvInferFrame frame;
+//     frame.converted_frame_ptr = memory->frame_memory_ptrs[idx];
+//     frame.scale_ratio_x = scale_ratio_x;
+//     frame.scale_ratio_y = scale_ratio_y;
+//     frame.obj_meta = nullptr;
+//     frame.frame_meta = nvds_get_nth_frame_meta (batch_meta->frame_meta_list, i);
+//     frame.frame_num = frame.frame_meta->frame_num;
+//     frame.batch_index = i;
+//     //frame.history = nullptr;
+//     frame.input_surf_params = in_surf->surfaceList + i;
+//     batch->frames.push_back (frame);
+
+//     /* Submit batch if the batch size has reached max_batch_size or
+//      * if this is the last frame in the input batched buffer. */
+//     if (batch->frames.size () == nvinfer->max_batch_size || i == num_filled - 1) {
+//       if (!convert_batch_and_push_to_input_thread (nvinfer, batch.get(), memory)) {
+//         return GST_FLOW_ERROR;
+//       }
+
+//       /* Batch submitted. Set batch to nullptr so that a new GstNvInferBatch
+//        * structure can be allocated if required. */
+//       batch.release ();
+//       conv_gst_buf = nullptr;
+//       nvinfer->tmp_surf.numFilled = 0;
+//     }
+//   }
+//   return GST_FLOW_OK;
+// }
+
+
 static GstFlowReturn
 gst_nvinfer_process_full_frame (GstNvInfer * nvinfer, GstBuffer * inbuf,
     NvBufSurface * in_surf)
@@ -1321,22 +1655,40 @@ gst_nvinfer_process_full_frame (GstNvInfer * nvinfer, GstBuffer * inbuf,
       return GST_FLOW_ERROR;
   }
 
-
   batch_meta = gst_buffer_get_nvds_batch_meta (inbuf);
   if (batch_meta == nullptr) {
     GST_ELEMENT_ERROR (nvinfer, STREAM, FAILED,
         ("NvDsBatchMeta not found for input buffer."), (NULL));
     return GST_FLOW_ERROR;
   }
-  num_filled = batch_meta->num_frames_in_batch;
 
-  /* Processing on full frames. Iterate through all the frames in the batched
-   * input buffer. */
-  for (guint i = 0; i < num_filled; i++) {
-    guint idx;
+  guint i = 0;
+  guint idx;
+  for (NvDsMetaList * l_frame = batch_meta->frame_meta_list; l_frame != NULL; l_frame = l_frame->next, i++) {
+    NvDsFrameMeta *frame_meta = (NvDsFrameMeta *) l_frame->data;
+    
+    // infer on source - configured
+    gboolean on_src = false;
+    for(auto src_id = nvinfer->operate_on_source_ids->begin();
+            src_id!=nvinfer->operate_on_source_ids->end(); ++src_id){
 
-    /* No existing GstNvInferBatch structure. Allocate a new structure,
-     * acquire a buffer from our internal pool for conversions. */
+      if(frame_meta->source_id == *src_id){
+        on_src = true; 
+        break;
+      }
+    }
+    if(!on_src) continue;  
+
+
+    // if(nvinfer->unique_id == 1) {
+    //   if(frame_meta->source_id != 0){ continue;}
+    // }
+
+    // if(nvinfer->unique_id == 2) {
+    //   if(frame_meta->source_id != 1){ continue;}
+    // }
+
+
     if (batch == nullptr) {
       batch.reset (new GstNvInferBatch);
       batch->push_buffer = FALSE;
@@ -1379,27 +1731,199 @@ gst_nvinfer_process_full_frame (GstNvInfer * nvinfer, GstBuffer * inbuf,
     frame.scale_ratio_x = scale_ratio_x;
     frame.scale_ratio_y = scale_ratio_y;
     frame.obj_meta = nullptr;
-    frame.frame_meta = nvds_get_nth_frame_meta (batch_meta->frame_meta_list, i);
+    frame.frame_meta = frame_meta; //modify
     frame.frame_num = frame.frame_meta->frame_num;
     frame.batch_index = i;
-    //frame.history = nullptr;
     frame.input_surf_params = in_surf->surfaceList + i;
     batch->frames.push_back (frame);
 
+
+    /* Submit batch if the batch size has reached max_batch_size or
+    * if this is the last frame in the input batched buffer. */
+    if (!convert_batch_and_push_to_input_thread (nvinfer, batch.get(), memory)) {
+      return GST_FLOW_ERROR;
+    }
+
+    /* Batch submitted. Set batch to nullptr so that a new GstNvInferBatch
+    * structure can be allocated if required. */
+    batch.release ();
+    conv_gst_buf = nullptr;
+    nvinfer->tmp_surf.numFilled = 0;
+        
+  }
+  return GST_FLOW_OK;
+}
+
+
+
+
+
+
+
+static GstFlowReturn
+gst_nvinfer_process_full_frame_1 (GstNvInfer * nvinfer, GstBuffer * inbuf,
+    NvBufSurface * in_surf)
+{
+  NvOSD_RectParams rect_params;
+  NvDsBatchMeta *batch_meta = NULL;
+  guint num_filled = 0;
+  std::unique_ptr<GstNvInferBatch> batch = nullptr;
+  GstBuffer *conv_gst_buf = nullptr;
+  GstFlowReturn flow_ret;
+  GstNvInferMemory *memory = nullptr;
+  gdouble scale_ratio_x, scale_ratio_y;
+  gboolean skip_batch;
+
+  /* Process batch only when interval_counter is 0. */
+  skip_batch = (nvinfer->interval_counter++ % (nvinfer->interval + 1) > 0);
+
+  if (skip_batch) {
+    return GST_FLOW_OK;
+  }
+
+  if (((in_surf->memType == NVBUF_MEM_DEFAULT || in_surf->memType == NVBUF_MEM_CUDA_DEVICE) &&
+       ((int)in_surf->gpuId != (int)nvinfer->gpu_id)) ||
+      (((int)in_surf->gpuId == (int)nvinfer->gpu_id) && (in_surf->memType == NVBUF_MEM_SYSTEM)))  {
+    GST_ELEMENT_ERROR (nvinfer, RESOURCE, FAILED,
+        ("Memory Compatibility Error:Input surface gpu-id doesnt match with configured gpu-id for element,"
+         " please allocate input using unified memory, or use same gpu-ids OR,"
+         " if same gpu-ids are used ensure appropriate Cuda memories are used"),
+        ("surface-gpu-id=%d,%s-gpu-id=%d",in_surf->gpuId,GST_ELEMENT_NAME(nvinfer),
+         nvinfer->gpu_id)); \
+      return GST_FLOW_ERROR;
+  }
+
+  g_print("id_infer: %d\n", nvinfer->unique_id);
+  batch_meta = gst_buffer_get_nvds_batch_meta (inbuf);
+  if (batch_meta == nullptr) {
+    GST_ELEMENT_ERROR (nvinfer, STREAM, FAILED,
+        ("NvDsBatchMeta not found for input buffer."), (NULL));
+    return GST_FLOW_ERROR;
+  }
+  num_filled = 1;// batch_meta->num_frames_in_batch;
+
+
+  guint i = 0;
+  for (NvDsMetaList * l_frame = batch_meta->frame_meta_list; l_frame != NULL; l_frame = l_frame->next) {
+    NvDsFrameMeta *frame_meta = (NvDsFrameMeta *) l_frame->data;
+
+    g_print("source_id: %d\n", frame_meta->source_id);
+    if(nvinfer->unique_id == 1) {
+      if(frame_meta->source_id == 0){
+        break;
+      }
+    }
+
+    if(nvinfer->unique_id == 2) {
+      if(frame_meta->source_id == 1){
+        break;
+      }
+    }
+    g_print("frame_meta->frame_num: %d\n", frame_meta->frame_num);
+    i++;
+  }
+
+  // if(nvinfer->unique_id == 1){
+  /* Processing on full frames. Iterate through all the frames in the batched
+   * input buffer. */
+  // for (guint i = 0; i < num_filled; i++) {
+    guint idx;
+
+  // guint i = nvinfer->unique_id -1;
+  // guint i = batch_meta->frame_meta_list.source_id;
+
+
+    /* No existing GstNvInferBatch structure. Allocate a new structure,
+     * acquire a buffer from our internal pool for conversions. */
+    if (batch == nullptr) {
+      batch.reset (new GstNvInferBatch);
+      batch->push_buffer = FALSE;
+      batch->inbuf = inbuf;
+      batch->inbuf_batch_num = nvinfer->current_batch_num;
+
+      flow_ret =
+          gst_buffer_pool_acquire_buffer (nvinfer->pool, &conv_gst_buf,
+          nullptr);
+      if (flow_ret != GST_FLOW_OK) {
+        return flow_ret;
+      }
+      memory = gst_nvinfer_buffer_get_memory (conv_gst_buf);
+      if (!memory) {
+        return GST_FLOW_ERROR;
+      }
+      batch->conv_buf = conv_gst_buf;
+    }
+
+    idx = batch->frames.size ();
+    // g_print("batch->frames.size: %d\n", idx);
+    /* Scale the entire frame to network resolution. */
+    rect_params.left = 0;
+    rect_params.top = 0;
+    rect_params.width = in_surf->surfaceList[i].width;
+    rect_params.height = in_surf->surfaceList[i].height;
+
+    /* Scale and convert the buffer. */
+    if (get_converted_buffer (nvinfer, in_surf, in_surf->surfaceList + i,
+            &rect_params, memory->surf, memory->surf->surfaceList + idx,
+            scale_ratio_x, scale_ratio_y,
+            memory->frame_memory_ptrs[idx]) != GST_FLOW_OK) {
+      GST_ELEMENT_ERROR (nvinfer, STREAM, FAILED, ("Buffer conversion failed"),
+          (NULL));
+      return GST_FLOW_ERROR;
+    }
+    // g_print("Scale and convert the buffer: ok\n");
+
+    /* Adding a frame to the current batch. Set the frames members. */
+    GstNvInferFrame frame;
+    frame.converted_frame_ptr = memory->frame_memory_ptrs[idx];
+    frame.scale_ratio_x = scale_ratio_x;
+    frame.scale_ratio_y = scale_ratio_y;
+    frame.obj_meta = nullptr;
+    // g_print("frame_memory_ptrs: ok\n");
+    // g_print("batch_meta->frame_meta_list.size: %d\n", batch_meta->num_frames_in_batch);
+    frame.frame_meta = nvds_get_nth_frame_meta (batch_meta->frame_meta_list, i);
+    // g_print("nvds_get_nth_frame_meta: ok\n");
+    if(frame.frame_meta == nullptr) {//g_print("nvds_get_nth_frame_meta: nullptr\n");
+    frame.frame_meta = nvds_get_nth_frame_meta (batch_meta->frame_meta_list, 0);
+    }
+    // g_print("frame.frame_meta->frame_num: %d\n", frame.frame_meta->frame_num);
+    // frame.frame_num = 0;
+    // }else {
+      frame.frame_num = frame.frame_meta->frame_num;
+    // }
+    // g_print("frame.frame_num: ok\n");
+    frame.batch_index = i;
+    // //frame.history = nullptr;
+    // g_print("batch_index: ok\n");
+    frame.input_surf_params = in_surf->surfaceList + i;
+    // g_print("frame.input_surf_params: ok\n");
+
+    // g_print("source_id: %d\n", frame.frame_meta->source_id);
+
+    // if(nvinfer->unique_id == i+1)
+    batch->frames.push_back (frame);
+    // g_print("batch->frames.push_backr: ok\n");
+    // else{
+    //   GstNvInferFrame frame;
+    //   batch->frames.push_back (frame);
+    // }
+
     /* Submit batch if the batch size has reached max_batch_size or
      * if this is the last frame in the input batched buffer. */
-    if (batch->frames.size () == nvinfer->max_batch_size || i == num_filled - 1) {
+    // if (batch->frames.size () == nvinfer->max_batch_size || i == num_filled - 1) {
       if (!convert_batch_and_push_to_input_thread (nvinfer, batch.get(), memory)) {
         return GST_FLOW_ERROR;
       }
+      g_print("Submit batch: ok\n");
 
       /* Batch submitted. Set batch to nullptr so that a new GstNvInferBatch
        * structure can be allocated if required. */
       batch.release ();
       conv_gst_buf = nullptr;
       nvinfer->tmp_surf.numFilled = 0;
-    }
-  }
+    // }
+  // }
+  // }
   return GST_FLOW_OK;
 }
 
@@ -1489,6 +2013,139 @@ should_infer_object (GstNvInfer * nvinfer, GstBuffer * inbuf,
   return TRUE;
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/******************************** image processing ****************************/
+/************************************** nms ***********************************/
+struct alignas(float) Detection{
+    float bbox[4];  //x1 y1 x2 y2
+    float class_confidence;
+    float landmark[10];
+};
+    
+bool cmp(Detection& a, Detection& b) {
+    return a.class_confidence > b.class_confidence;
+}
+
+float iou(float lbox[4], float rbox[4]) {
+    float interBox[] = {
+        std::max(lbox[0], rbox[0]), //left
+        std::min(lbox[2], rbox[2]), //right
+        std::max(lbox[1], rbox[1]), //top
+        std::min(lbox[3], rbox[3]), //bottom
+    };
+
+    if(interBox[2] > interBox[3] || interBox[0] > interBox[1])
+        return 0.0f;
+
+    float interBoxS = (interBox[1] - interBox[0]) * (interBox[3] - interBox[2]);
+    return interBoxS / ((lbox[2] - lbox[0]) * (lbox[3] - lbox[1]) + (rbox[2] - rbox[0]) * (rbox[3] - rbox[1]) -interBoxS + 0.000001f);
+}
+
+void nms(std::vector<Detection>& res, float *output, float conf_thresh, float nms_thresh = 0.5) {
+    int det_size = sizeof(Detection) / sizeof(float);
+    std::map<float, std::vector<Detection>> m;
+    for (int i = 0; i < output[0] && i < 1000; i++) {
+        if (output[1 + 15 * i + 4] <= conf_thresh) continue;
+        Detection det;
+        memcpy(&det, &output[1 + det_size * i], det_size * sizeof(float));
+        // if (m.count(det.class_id) == 0) m.emplace(det.class_id, std::vector<Detection>());
+        m[0].push_back(det);
+    }
+    for (auto it = m.begin(); it != m.end(); it++) {
+        //std::cout << it->second[0].class_id << " --- " << std::endl;
+        auto& dets = it->second;
+        std::sort(dets.begin(), dets.end(), cmp);
+        for (size_t m = 0; m < dets.size(); ++m) {
+            auto& item = dets[m];
+            res.push_back(item);
+            for (size_t n = m + 1; n < dets.size(); ++n) {
+                if (iou(item.bbox, dets[n].bbox) > nms_thresh) {
+                    dets.erase(dets.begin()+n);
+                    --n;
+                }
+            }
+        }
+    }
+}
+
+bool alignment_face(Detection info_face, cv::Mat img_mat, float scale_x, float scale_y){
+
+  cv::Rect crop_rect;
+  /* rectangle for cropped objects */
+  crop_rect = cv::Rect (static_cast<unsigned int>(scale_x*info_face.bbox[0]),
+    static_cast<unsigned int>(scale_y*info_face.bbox[1]),
+    scale_x*static_cast<unsigned int>(info_face.bbox[2]-info_face.bbox[0]), 
+    scale_y*static_cast<unsigned int>(info_face.bbox[3]-info_face.bbox[1]));
+  
+  if(crop_rect.x + crop_rect.width > img_mat.cols){ crop_rect.width = img_mat.cols - crop_rect.x;}
+  if(crop_rect.y + crop_rect.height > img_mat.rows){ crop_rect.height = img_mat.rows - crop_rect.y;}
+  if(crop_rect.width <= 0 || crop_rect.height <= 0) return false;
+
+  for(int l = 0; l < 10;l++){
+
+    info_face.landmark[l] = scale_x*info_face.landmark[l];// - crop_rect.x;
+    info_face.landmark[++l] = scale_y*info_face.landmark[l+1];// - crop_rect.y;
+    cv::circle( img_mat, cv::Point( static_cast<unsigned int>(info_face.landmark[l-1]), 
+      static_cast<unsigned int>(info_face.landmark[l])),
+      3, cv::Scalar( 0, 255, 0 ), cv::FILLED, cv::LINE_8 );
+  }
+
+  // transform landmark: M, warpAffine image
+  memcpy(src_landmark.data, default_landmark, 10 * sizeof(float));
+  cv::Mat dst(5 , 2, CV_32FC1, info_face.landmark);
+  memcpy(dst.data, info_face.landmark, 10 * sizeof(float));
+  cv::Mat M = FacePreprocess::similarTransform(dst, src_landmark);  
+  
+  cv::Mat img_warp;
+
+  cv::warpAffine(img_mat, img_warp, M, cv::Size());
+  int x1 = M.at<float>(0,0)*crop_rect.x + M.at<float>(0,1)*crop_rect.y + M.at<float>(0,2);
+  int y1 = M.at<float>(1,0)*crop_rect.x + M.at<float>(1,1)*crop_rect.y + M.at<float>(1,2);
+  int x2 = M.at<float>(0,0)*(crop_rect.x + crop_rect.width) + M.at<float>(0,1)*crop_rect.y + M.at<float>(0,2);
+  int y2 = M.at<float>(1,0)*(crop_rect.x + crop_rect.width) + M.at<float>(1,1)*crop_rect.y + M.at<float>(1,2);
+  int x3 = M.at<float>(0,0)*crop_rect.x + M.at<float>(0,1)*(crop_rect.y + crop_rect.height) + M.at<float>(0,2);
+  int y3 = M.at<float>(1,0)*crop_rect.x + M.at<float>(1,1)*(crop_rect.y + crop_rect.height) + M.at<float>(1,2);
+  int x4 = M.at<float>(0,0)*(crop_rect.x + crop_rect.width) + M.at<float>(0,1)*(crop_rect.y + crop_rect.height) + M.at<float>(0,2);
+  int y4 = M.at<float>(1,0)*(crop_rect.x + crop_rect.width) + M.at<float>(1,1)*(crop_rect.y + crop_rect.height) + M.at<float>(1,2);
+
+  int x_min = std::min({x1, x2, x3});
+  int y_min = std::min({y1, y2, y3});
+  int x_max = std::max({x2, x3, x4});
+  int y_max = std::max({y2, y3, y4});
+
+  x_min += int((x_max - x_min - crop_rect.width)/2);
+  y_min += int((y_max - y_min - crop_rect.height)/2);
+
+  cv::Rect crop_warp = cv::Rect(x_min, y_min, crop_rect.width, crop_rect.height);
+
+  if(crop_warp.x < 0) crop_warp.x = 0;
+  if(crop_warp.y < 0) crop_warp.y = 0;
+  if(crop_warp.x + crop_warp.width > img_mat.cols){ crop_warp.width = img_mat.cols - crop_warp.x;}
+  if(crop_warp.y + crop_warp.height > img_mat.rows){ crop_warp.height = img_mat.rows - crop_warp.y;}
+  if(crop_warp.width <= 0 || crop_warp.height <= 0) return false;
+
+  // cv::resize(img_warp(crop_warp), img_mat(crop_rect) , cv::Size(crop_rect.width, crop_rect.height), 0, 0, cv::INTER_LINEAR);
+  img_mat(crop_rect) = img_warp(crop_warp)*1;
+ 
+  return true;
+}
+
+/***************************** end nms ********************************************/
+
+
 /* Process on objects detected by upstream detectors.
  *
  * Secondary classifiers can work in asynchronous mode as well. In this mode,
@@ -1507,6 +2164,7 @@ gst_nvinfer_process_objects (GstNvInfer * nvinfer, GstBuffer * inbuf,
   GstNvInferMemory *memory = nullptr;
   GstFlowReturn flow_ret;
   gdouble scale_ratio_x, scale_ratio_y;
+  float scale_net_x = 2, scale_net_y = 1.5;
   gboolean warn_untracked_object = FALSE;
 
   NvDsBatchMeta *batch_meta = gst_buffer_get_nvds_batch_meta (inbuf);
@@ -1533,6 +2191,80 @@ gst_nvinfer_process_objects (GstNvInfer * nvinfer, GstBuffer * inbuf,
       source_info = &iter->second;
     }
     source_info->last_seen_frame_num = frame_meta->frame_num;
+
+
+
+
+
+
+
+    /********************* get landmark *********************************/
+   
+    std::vector<Detection> infoFaces;
+    if(frame_meta->source_id == 0){
+      /* Iterate user metadata in frames to search PGIE's tensor metadata */
+      for (NvDsMetaList * l_user = frame_meta->frame_user_meta_list;
+          l_user != NULL; l_user = l_user->next) {
+        NvDsUserMeta *user_meta = (NvDsUserMeta *) l_user->data;
+        if (user_meta->base_meta.meta_type != NVDSINFER_TENSOR_OUTPUT_META)
+          continue;
+
+        /* convert to tensor metadata */
+        NvDsInferTensorMeta *meta = (NvDsInferTensorMeta *) user_meta->user_meta_data;
+        for (unsigned int i = 0; i < meta->num_output_layers; i++) {
+          NvDsInferLayerInfo *info = &meta->output_layers_info[i];
+          info->buffer = meta->out_buf_ptrs_host[i];
+          if (meta->out_buf_ptrs_dev[i]) {
+            cudaMemcpy (meta->out_buf_ptrs_host[i], meta->out_buf_ptrs_dev[i],
+                info->inferDims.numElements * 4, cudaMemcpyDeviceToHost);
+          }
+        }
+        /* Parse output tensor and fill detection results into objectList. */
+        std::vector <NvDsInferLayerInfo> outputLayersInfo (meta->output_layers_info,
+          meta->output_layers_info + meta->num_output_layers);
+        nms(infoFaces, (float*)(outputLayersInfo[0].buffer), CONF_THRESH, NMS_THRESH);     
+
+        // std::cout<<"W: "<<meta->network_info.width<<" xH: "<<meta->network_info.height<<"\n";
+        scale_net_x = meta->network_info.width;
+        scale_net_y= meta->network_info.height;
+      }
+    }
+
+    /***************************** alignment *******************************************/
+    if(infoFaces.size() > 0){
+
+      if (in_surf->surfaceList[frame_meta->batch_id].mappedAddr.addr[0] == NULL){
+        if (NvBufSurfaceMap (in_surf, frame_meta->batch_id, 0, NVBUF_MAP_READ_WRITE) != 0){
+          GST_ELEMENT_ERROR (nvinfer, STREAM, FAILED,
+              ("%s:buffer map to be accessed by CPU failed", __func__), (NULL));
+          return GST_FLOW_ERROR;
+        }
+      }
+          /* Cache the mapped data for CPU access */
+      NvBufSurfaceSyncForCpu (in_surf, frame_meta->batch_id, 0);   
+
+      cv::Mat img_mat =
+        cv::Mat (in_surf->surfaceList[frame_meta->batch_id].planeParams.height[0],
+        in_surf->surfaceList[frame_meta->batch_id].planeParams.width[0], CV_8UC4,
+        in_surf->surfaceList[frame_meta->batch_id].mappedAddr.addr[0],
+        in_surf->surfaceList[frame_meta->batch_id].planeParams.pitch[0]);
+
+      scale_net_x = (in_surf->surfaceList[frame_meta->batch_id].planeParams.width[0])/scale_net_x;
+      scale_net_y = (in_surf->surfaceList[frame_meta->batch_id].planeParams.height[0])/scale_net_y;
+      for(auto info_face : infoFaces){
+        alignment_face(info_face, img_mat, scale_net_x, scale_net_y);
+      }
+
+      NvBufSurfaceSyncForDevice (in_surf, frame_meta->batch_id, 0);
+    }
+  /************************************ end alignment ****************************\
+
+
+
+
+
+
+
 
     /* Iterate through all the objects. */
     for (NvDsMetaList * l_obj = frame_meta->obj_meta_list; l_obj != NULL;
@@ -1666,6 +2398,15 @@ gst_nvinfer_process_objects (GstNvInfer * nvinfer, GstBuffer * inbuf,
         batch->conv_buf = conv_gst_buf;
       }
       idx = batch->frames.size ();
+
+      /* Map the buffer so that it can be accessed by CPU */
+      if (in_surf->surfaceList[frame_meta->batch_id].mappedAddr.addr[0] == NULL){
+        if (NvBufSurfaceMap (in_surf, frame_meta->batch_id, 0, NVBUF_MAP_READ_WRITE) != 0){
+          GST_ELEMENT_ERROR (nvinfer, STREAM, FAILED,
+              ("%s:buffer map to be accessed by CPU failed", __func__), (NULL));
+          return GST_FLOW_ERROR;
+        }
+      }
 
       /* Crop, scale and convert the buffer. */
       if (get_converted_buffer (nvinfer, in_surf,
@@ -2070,9 +2811,6 @@ gst_nvinfer_output_loop (gpointer data)
         new_info.attributes.assign(classification_output.attributes,
             classification_output.attributes + classification_output.numAttributes);
         new_info.label.assign(classification_output.label);
-        for (guint i = 0; i < classification_output.numAttributes; i++) {
-          classification_output.attributes[i].attributeLabel = nullptr;
-        }
 
         /* Object history is available merge the old and new classification
          * results. */

@@ -30,6 +30,10 @@
 
 #include "nvtx3/nvToolsExt.h"
 
+/* Open CV headers */
+#include "opencv2/imgproc/imgproc.hpp"
+#include "opencv2/highgui/highgui.hpp"
+
 /* Package and library details required for plugin_init */
 #define PACKAGE "nvinfer"
 #define VERSION "1.0"
@@ -65,6 +69,7 @@ enum
   PROP_CONFIG_FILE_PATH,
   PROP_OPERATE_ON_GIE_ID,
   PROP_OPERATE_ON_CLASS_IDS,
+  PROP_OPERATE_ON_SOURCE_IDS, // modify
   PROP_FILTER_OUT_CLASS_IDS,
   PROP_MODEL_ENGINEFILE,
   PROP_BATCH_SIZE,
@@ -114,20 +119,12 @@ typedef struct
 } GstNvInferColorParams;
 
 /** Holds the cached information of an object. */
-struct GstNvInferObjectInfo {
+typedef struct {
   /** Vector of cached classification attributes. */
   std::vector<NvDsInferAttribute> attributes;
   /** Cached string label. */
   std::string label;
-
-  GstNvInferObjectInfo(const GstNvInferObjectInfo&) = delete;
-  GstNvInferObjectInfo() = default;
-  ~GstNvInferObjectInfo(){
-    for (auto &attr : attributes) {
-      free (attr.attributeLabel);
-    }
-  }
-};
+} GstNvInferObjectInfo;
 
 /**
  * Holds the inference information/history for one object based on it's
@@ -213,6 +210,8 @@ struct _GstNvInfer
   /** Boolean indicating if entire frame should be inferred or crop objects
    * based on metadata recieved from the primary detector. */
   gboolean process_full_frame;
+  std::set<uint> *operate_on_source_ids; //modify
+  // std::vector<uint> *operate_on_source_ids; //modify
 
   /** Path to the configuration file for this instance of gst-nvinfer. */
   gchar *config_file_path;

@@ -139,8 +139,8 @@ attach_metadata_detector (GstNvInfer * nvinfer, GstMiniObject * tensor_out_objec
     text_params.font_params.font_color = (NvOSD_ColorParams) {
     1, 1, 1, 1};
 
-    if (nvinfer->output_instance_mask && obj.mask) {                             
-      float *mask = (float *)g_malloc(obj.mask_size);                            
+    if (nvinfer->output_instance_mask && obj.mask) {
+      float *mask = (float *)g_malloc(obj.mask_size);
       memcpy(mask, obj.mask, obj.mask_size);
       obj_meta->mask_params.data = mask;
       obj_meta->mask_params.size = obj.mask_size;
@@ -271,14 +271,8 @@ void
 merge_classification_output (GstNvInferObjectHistory & history,
     GstNvInferObjectInfo &new_result)
 {
-  for (auto &attr : history.cached_info.attributes) {
-    free(attr.attributeLabel);
-  }
   history.cached_info.attributes.assign (new_result.attributes.begin (),
       new_result.attributes.end ());
-  for (auto &attr : history.cached_info.attributes) {
-    attr.attributeLabel = strdup(attr.attributeLabel);
-  }
   history.cached_info.label.assign (new_result.label);
 }
 

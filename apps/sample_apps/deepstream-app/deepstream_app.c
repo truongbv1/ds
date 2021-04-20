@@ -817,7 +817,8 @@ create_common_elements (NvDsConfig * config, NvDsPipeline * pipeline,
   gboolean ret = FALSE;
   *sink_elem = *src_elem = NULL;
 
-  if (config->primary_gie_config.enable) {
+  // modify for secondary working with primary unable
+  // if (config->primary_gie_config.enable) {
     if (config->num_secondary_gie_sub_bins > 0) {
       if (!create_secondary_gie_bin (config->num_secondary_gie_sub_bins,
               config->primary_gie_config.unique_id,
@@ -836,7 +837,7 @@ create_common_elements (NvDsConfig * config, NvDsPipeline * pipeline,
       }
       *sink_elem = pipeline->common_elements.secondary_gie_bin.bin;
     }
-  }
+  // }
 
   if (config->dsanalytics_config.enable) {
     // Create dsanalytics element bin and set properties

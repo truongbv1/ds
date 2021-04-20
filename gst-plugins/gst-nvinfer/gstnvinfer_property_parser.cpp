@@ -456,7 +456,25 @@ gst_nvinfer_parse_other_attribute (GstNvInfer * nvinfer,
       nvinfer->filter_out_class_ids->insert(int_list[i]);
     }
     g_free(int_list);
-  } else if (!g_strcmp0 (key, CONFIG_GROUP_INFER_SCALING_COMPUTE_HW)) {
+  }  
+  
+  
+  // modify
+  else if (!g_strcmp0 (key, CONFIG_GROUP_INFER_SOURCE_IDS_FOR_OPERATION)) {
+    gsize length;
+
+    gint *int_list = g_key_file_get_integer_list(key_file, group_name,
+        CONFIG_GROUP_INFER_SOURCE_IDS_FOR_OPERATION, &length, &error);
+    CHECK_ERROR (error);
+    for (guint i = 0; i < length; i++) {
+      nvinfer->operate_on_source_ids->insert(int_list[i]);
+    }
+    g_free(int_list);
+  }
+  
+  
+  
+  else if (!g_strcmp0 (key, CONFIG_GROUP_INFER_SCALING_COMPUTE_HW)) {
     int val =  g_key_file_get_integer (key_file, group_name,
     CONFIG_GROUP_INFER_SCALING_COMPUTE_HW, &error);
     CHECK_ERROR (error);
@@ -464,7 +482,7 @@ gst_nvinfer_parse_other_attribute (GstNvInfer * nvinfer,
     switch (val) {
       case NvBufSurfTransformCompute_Default:
       case NvBufSurfTransformCompute_GPU:
-#ifdef __aarch64__
+#ifdef IS_TEGRA
       case NvBufSurfTransformCompute_VIC:
 #endif
         break;
@@ -712,7 +730,6 @@ gst_nvinfer_parse_props (GstNvInfer * nvinfer,
         init_params->outputIOFormats = g_key_file_get_string_list(key_file, CONFIG_GROUP_PROPERTY,
         CONFIG_GROUP_INFER_OUTPUT_IO_FORMATS, &length, &error);
         init_params->numOutputIOFormats = length;
-        CHECK_ERROR(error);
     } else if (!g_strcmp0 (*key, CONFIG_GROUP_INFER_LAYER_DEVICE_PRECISION)) {
         gsize length;
         init_params->layerDevicePrecisions = g_key_file_get_string_list(key_file, CONFIG_GROUP_PROPERTY,
@@ -1091,23 +1108,6 @@ gst_nvinfer_parse_props (GstNvInfer * nvinfer,
             CONFIG_GROUP_INFER_SEGMENTATION_THRESHOLD,
             init_params->segmentationThreshold);
         goto done;
-      }
-    } else if (!g_strcmp0 (*key, CONFIG_GROUP_INFER_SEGMENTATION_OUTPUT_ORDER)){
-      gint val = g_key_file_get_integer (key_file, CONFIG_GROUP_PROPERTY,
-          CONFIG_GROUP_INFER_SEGMENTATION_OUTPUT_ORDER, &error);
-      CHECK_ERROR (error);
-      switch (val) {
-        case 0:
-          init_params->segmentationOutputOrder = NvDsInferTensorOrder_kNCHW;
-          break;
-        case 1:
-          init_params->segmentationOutputOrder = NvDsInferTensorOrder_kNHWC;
-          break;
-        default:
-          g_printerr ("Error. Invalid value for '%s', Segmentation output order :'%d'\n",
-          CONFIG_GROUP_INFER_SEGMENTATION_OUTPUT_ORDER, val);
-          goto done;
-          break;
       }
     } else if (nvinfer) {
       if (!gst_nvinfer_parse_other_attribute (

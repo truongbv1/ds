@@ -20,7 +20,7 @@
 # DEALINGS IN THE SOFTWARE.
 ################################################################################
 
-CUDA_VER?=
+CUDA_VER?=10.2
 ifeq ($(CUDA_VER),)
   $(error "CUDA_VER is not set")
 endif
@@ -48,7 +48,7 @@ PKGS:= gstreamer-1.0 gstreamer-video-1.0 x11 json-glib-1.0
 OBJS:= $(SRCS:.c=.o)
 
 CFLAGS+= -I./ -I../../apps-common/includes \
-		 -I../../../includes -DDS_VERSION_MINOR=1 -DDS_VERSION_MAJOR=5 \
+		 -I/opt/nvidia/deepstream/deepstream-$(NVDS_VERSION)/sources/includes -DDS_VERSION_MINOR=1 -DDS_VERSION_MAJOR=5 \
 		 -I /usr/local/cuda-$(CUDA_VER)/include
 
 LIBS:= -L/usr/local/cuda-$(CUDA_VER)/lib64/ -lcudart

@@ -105,7 +105,6 @@
 
 /** Segmentaion specific parameters. */
 #define CONFIG_GROUP_INFER_SEGMENTATION_THRESHOLD "segmentation-threshold"
-#define CONFIG_GROUP_INFER_SEGMENTATION_OUTPUT_ORDER "segmentation-output-order"
 
 /** Instance Segmentaion specific parameters. */
 #define CONFIG_GROUP_INFER_OUTPUT_INSTANCE_MASK "output-instance-mask"
@@ -122,6 +121,7 @@
 #define CONFIG_GROUP_INFER_GIE_ID_FOR_OPERATION "operate-on-gie-id"
 #define CONFIG_GROUP_INFER_CLASS_IDS_FOR_OPERATION "operate-on-class-ids"
 #define CONFIG_GROUP_INFER_CLASS_IDS_FOR_FILTERING "filter-out-class-ids"
+#define CONFIG_GROUP_INFER_SOURCE_IDS_FOR_OPERATION "operate-on-source-ids"//modify
 
 /** Per-class detection/filtering parameters. */
 #define CONFIG_GROUP_INFER_CLASS_ATTRS_PREFIX "class-attrs-"
